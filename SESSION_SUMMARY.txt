@@ -1,0 +1,30 @@
+UBBS V2 — Session Summary
+=========================
+Last updated: May 26, 2026
+
+✅ WHAT'S DONE
+--------------
+- App running natively on Windows at http://localhost:8501
+- All Supabase tables, grants, and schema fully working
+- Login, shift gate, new orders, active sessions, cash register, analytics — all verified
+- Notification system fixed (messages no longer disappear instantly)
+- Receipt pipeline wired up: Edge Function deployed, Resend sandbox configured, DB trigger updated
+
+⏳ ONE THING PENDING
+---------------------
+- Receipt email — waiting for the Resend account owner to confirm they received a test receipt
+
+📋 STILL TO VERIFY (when we resume)
+--------------------------------------
+- Receipt email delivery confirmed
+- Closing shift + cash mismatch alert
+- Admin cash overrides
+- Creating a second user (staff role) and verifying they only see Staff dashboard
+
+HOW TO RESUME
+-------------
+1. Open Command Prompt (Windows CMD)
+2. cd C:\Users\Lenovo\Desktop\projects\ubbs-v2
+3. python -m streamlit run app.py --server.port 8501
+4. Open http://localhost:8501 in browser
+5. Paste this file's contents into Claude Code and say "let's continue"

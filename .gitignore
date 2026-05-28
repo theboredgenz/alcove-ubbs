@@ -1,0 +1,20 @@
+# Streamlit secrets — NEVER commit these
+.streamlit/secrets.toml
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local session data
+.sessions/
+
+# Local Supabase dev files
+supabase/.branches/
+supabase/.temp/
+
+# OS files
+.DS_Store
+Thumbs.db
