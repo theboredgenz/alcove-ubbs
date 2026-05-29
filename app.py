@@ -532,7 +532,7 @@ def fetch_active_sessions(client: Client) -> list[dict]:
             client.table("transactions")
             .select(
                 "transaction_id, barcode, start_time, end_time, status, "
-                "payment_method, customer_id, shift_id, created_by"
+                "payment_method, customer_id, shift_id, created_by, cash_tendered_centavos"
             )
             .eq("status", "ACTIVE")
             .order("start_time")
@@ -813,6 +813,41 @@ def _create_session(client: Client, kind: str, payment_method: str, tendered_cen
     st.rerun()
 
 
+def _render_extend_cash_flow(client: Client, tx: dict, ext_kind: str) -> None:
+    """Cash collection confirmation before an in-window extension."""
+    tx_id = tx["transaction_id"]
+    state_key = f"extending_{tx_id}_{ext_kind}"
+    price = PRICE_1HR_CENTAVOS if ext_kind == "INITIAL_1HR" else PRICE_5HR_CENTAVOS
+    label = "1 Hour" if ext_kind == "INITIAL_1HR" else "5 Hours"
+
+    with st.container(border=True):
+        st.markdown(f"### Extend {label} — {tx['customer_name']}")
+        st.markdown(f"**Extension fee:** {fmt_centavos(price)}")
+
+        tendered_php = st.number_input(
+            "Cash Tendered (₱)",
+            min_value=0.00, step=10.00, format="%.2f",
+            key=f"extend_cash_{tx_id}_{ext_kind}",
+            value=float(price) / 100.0,
+        )
+        tendered_centavos = int(round(tendered_php * 100))
+        change = tendered_centavos - price
+        col_a, col_b = st.columns(2)
+        col_a.metric("Fee", fmt_centavos(price))
+        col_b.metric("Change", fmt_centavos(change) if change >= 0 else "INSUFFICIENT")
+
+        c1, c2 = st.columns([1, 4])
+        with c1:
+            if st.button("✓ Confirm & Extend", key=f"confirm_extend_{tx_id}_{ext_kind}",
+                         type="primary", disabled=(change < 0)):
+                st.session_state.pop(state_key, None)
+                _extend_or_new(client, tx, ext_kind)
+        with c2:
+            if st.button("✗ Cancel", key=f"cancel_extend_{tx_id}_{ext_kind}"):
+                st.session_state.pop(state_key, None)
+                st.rerun()
+
+
 def render_active_sessions_table(sessions: list[dict], show_actions: bool, client: Client) -> None:
     """V2 items 17, 18 — render with grace period countdown + color states."""
     if not sessions:
@@ -871,11 +906,17 @@ def render_active_sessions_table(sessions: list[dict], show_actions: bool, clien
 
                 with action_cols[0]:
                     if st.button("➕ Extend (+1hr)", key=f"ext_{tx_id}"):
-                        _extend_or_new(client, tx, "INITIAL_1HR")
+                        if tx["payment_method"] == "CASH":
+                            st.session_state[f"extending_{tx_id}_INITIAL_1HR"] = True
+                        else:
+                            _extend_or_new(client, tx, "INITIAL_1HR")
 
                 with action_cols[1]:
                     if st.button("➕ Extend (+5hr)", key=f"ext5_{tx_id}"):
-                        _extend_or_new(client, tx, "INITIAL_5HR")
+                        if tx["payment_method"] == "CASH":
+                            st.session_state[f"extending_{tx_id}_INITIAL_5HR"] = True
+                        else:
+                            _extend_or_new(client, tx, "INITIAL_5HR")
 
                 with action_cols[2]:
                     if st.button("✅ Close Order", key=f"close_{tx_id}", type="primary"):
@@ -885,6 +926,12 @@ def render_active_sessions_table(sessions: list[dict], show_actions: bool, clien
                     if require_role("manager"):
                         if st.button("❌ Void", key=f"void_{tx_id}"):
                             st.session_state[f"voiding_{tx_id}"] = True
+
+                # Inline extend cash flows.
+                if st.session_state.get(f"extending_{tx_id}_INITIAL_1HR"):
+                    _render_extend_cash_flow(client, tx, "INITIAL_1HR")
+                if st.session_state.get(f"extending_{tx_id}_INITIAL_5HR"):
+                    _render_extend_cash_flow(client, tx, "INITIAL_5HR")
 
                 # Inline close flow.
                 if st.session_state.get(f"closing_{tx_id}"):
@@ -933,18 +980,28 @@ def _render_close_flow(client: Client, tx: dict) -> None:
 
         cash_tendered_centavos: int | None = None
         if tx["payment_method"] == "CASH":
-            tendered_php = st.number_input(
-                "Cash Tendered (₱)",
-                min_value=0.00, step=10.00, format="%.2f",
-                key=f"close_tendered_{tx_id}",
-                value=float(projected_total) / 100.0,
-            )
-            cash_tendered_centavos = int(round(tendered_php * 100))
-            change = cash_tendered_centavos - projected_total
-            col_a, col_b = st.columns(2)
-            col_a.metric("Amount Due", fmt_centavos(projected_total))
-            col_b.metric("Change", fmt_centavos(change) if change >= 0 else "INSUFFICIENT")
-            disabled = change < 0
+            stored_tendered = tx.get("cash_tendered_centavos") or 0
+            additional_needed = max(0, projected_total - stored_tendered)
+            if additional_needed > 0:
+                if stored_tendered > 0:
+                    st.markdown(f"Previously collected: **{fmt_centavos(stored_tendered)}**")
+                tendered_php = st.number_input(
+                    "Additional Cash Tendered (₱)" if stored_tendered > 0 else "Cash Tendered (₱)",
+                    min_value=0.00, step=10.00, format="%.2f",
+                    key=f"close_tendered_{tx_id}",
+                    value=float(additional_needed) / 100.0,
+                )
+                extra_centavos = int(round(tendered_php * 100))
+                cash_tendered_centavos = stored_tendered + extra_centavos
+                change = cash_tendered_centavos - projected_total
+                col_a, col_b = st.columns(2)
+                col_a.metric("Total Due", fmt_centavos(projected_total))
+                col_b.metric("Change", fmt_centavos(change) if change >= 0 else "INSUFFICIENT")
+                disabled = change < 0
+            else:
+                st.info(f"Payment already collected: {fmt_centavos(projected_total)}")
+                cash_tendered_centavos = stored_tendered if stored_tendered > 0 else projected_total
+                disabled = False
         else:
             disabled = False
 
@@ -1208,7 +1265,10 @@ def render_admin_dashboard(client: Client, shift: dict) -> None:
     with tabs[0]:
         sub = st.tabs(["🧾 New Order", "⏱ Active Sessions", "💵 Cash Register"])
         with sub[0]:
-            staff_tab_new_order(client)
+            if not shift.get("shift_id") or shift.get("opening_cash_centavos") is None:
+                st.warning("A shift must be open with an opening cash count before creating orders.")
+            else:
+                staff_tab_new_order(client)
         with sub[1]:
             staff_tab_active_sessions({"client": client})
         with sub[2]:
@@ -1232,7 +1292,16 @@ def admin_tab_cash_register(client: Client, shift: dict) -> None:
     st.subheader("💵 Cash Register (Admin View)")
 
     if not shift.get("shift_id"):
-        st.info("No shift is currently open. Staff will open one at the start of the day.")
+        st.info("No shift is currently open.")
+        amount = st.number_input(
+            "Opening Cash in Register (₱)",
+            min_value=0.00, step=1.00, format="%.2f", key="admin_open_shift_amount",
+        )
+        if st.button("💰 Open Shift", type="primary", key="admin_open_shift_btn"):
+            result = call_rpc(client, "open_shift", {"p_opening_cash_centavos": int(round(amount * 100))})
+            if result:
+                _notify("Shift opened.")
+                st.rerun()
         return
 
     c1, c2, c3 = st.columns(3)

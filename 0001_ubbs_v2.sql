@@ -1341,6 +1341,22 @@ SET search_path = public AS $fn$
     FROM cash_movements cm
     JOIN staff_profiles sp ON sp.user_id = cm.actor_id
    WHERE (cm.created_at AT TIME ZONE 'Asia/Manila')::DATE = (SELECT d FROM the_date)
+  UNION ALL
+  SELECT
+    t.actual_checkout_time AS occurred_at,
+    'CUSTOMER_CASH_PAYMENT' AS action,
+    (t.final_fee_centavos::NUMERIC / 100.0) AS amount_php,
+    sp.display_name AS actor_name,
+    sp.role AS actor_role,
+    'Customer: ' || COALESCE(cp.first_name || ' ' || cp.last_name, t.barcode) AS reason,
+    t.shift_id AS shift_id
+    FROM transactions t
+    JOIN staff_profiles sp ON sp.user_id = t.created_by
+    LEFT JOIN customer_profiles cp ON cp.customer_id = t.customer_id
+   WHERE t.payment_method = 'CASH'
+     AND t.status = 'COMPLETED'
+     AND t.final_fee_centavos IS NOT NULL
+     AND (t.actual_checkout_time AT TIME ZONE 'Asia/Manila')::DATE = (SELECT d FROM the_date)
    ORDER BY 1 DESC;
 $fn$;
 
