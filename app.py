@@ -840,6 +840,13 @@ def _render_extend_cash_flow(client: Client, tx: dict, ext_kind: str) -> None:
         with c1:
             if st.button("✓ Confirm & Extend", key=f"confirm_extend_{tx_id}_{ext_kind}",
                          type="primary", disabled=(change < 0)):
+                new_total_tendered = (tx.get("cash_tendered_centavos") or 0) + tendered_centavos
+                try:
+                    client.table("transactions").update({
+                        "cash_tendered_centavos": new_total_tendered,
+                    }).eq("transaction_id", tx_id).execute()
+                except Exception:
+                    pass
                 st.session_state.pop(state_key, None)
                 _extend_or_new(client, tx, ext_kind)
         with c2:
